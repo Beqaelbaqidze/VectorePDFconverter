@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PDF Shape Viewer with Custom Shapefile Export</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #editor-bar { position: absolute; top: 0; left: 0; background-color: #333; color: white; padding: 10px; z-index: 1; }
+        #pdf_input, #shp_name { margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="editor-bar">
+        <input type="file" id="pdf_input" accept=".pdf" />
+        <input type="text" id="shp_name" placeholder="Enter Shapefile Name" />
+        <button onclick="loadShapes()">Load Shapes</button>
+        <button onclick="exportCorrected()">Save Shapes</button>
+    </div>
+    <div id="canvas-container"></div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer;
+        let shapes = [];
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            camera.position.z = 500;
+
+            animate();  // Start the animation loop
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function loadShapes() {
+            const fileInput = document.getElementById('pdf_input');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert("Please select a PDF file first.");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('pdf_file', file);
+
+            fetch('/extract_shapes', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.error) {
+                    console.error("Server Error:", data.error);
+                    alert("Error: " + data.error);
+                } else {
+                    console.log("Shapes loaded from server:", data);
+                    shapes = data;
+                    drawShapes();
+                }
+            })
+            .catch(error => console.error("Error loading shapes:", error));
+        }
+
+        function drawShapes() {
+    while (scene.children.length > 0) { 
+        scene.remove(scene.children[0]); 
+    }
+
+    let bounds = new THREE.Box3();
+
+    shapes.forEach((shape, index) => {
+        let geometry;
+        if (shape.type === 'Polygon') {
+            const points = shape.coordinates[0].map(pt => {
+                // Rotate coordinates by 180 degrees
+                const rotatedX = pt[0]; // Invert X coordinate
+                const rotatedY = pt[1]; // Invert Y coordinate
+                return new THREE.Vector3(rotatedX, rotatedY, 0);
+            });
+            geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0xff0000 });
+            const line = new THREE.LineLoop(geometry, material);
+            scene.add(line);
+            bounds.expandByObject(line);
+            console.log(`Polygon ${index} added with points:`, points);
+        } else if (shape.type === 'LineString') {
+            const points = shape.coordinates.map(pt => {
+                // Rotate coordinates by 180 degrees
+                const rotatedX = pt[0]; // Invert X coordinate
+                const rotatedY = pt[1]; // Invert Y coordinate
+                return new THREE.Vector3(rotatedX, rotatedY, 0);
+            });
+            geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const material = new THREE.LineBasicMaterial({ color: 0x0000ff });
+            const line = new THREE.Line(geometry, material);
+            scene.add(line);
+            bounds.expandByObject(line);
+            console.log(`LineString ${index} added with points:`, points);
+        }
+    });
+
+    if (bounds.isEmpty()) {
+        console.warn("Bounds are empty. Shapes may not be visible.");
+    } else {
+        const center = bounds.getCenter(new THREE.Vector3());
+        const size = bounds.getSize(new THREE.Vector3());
+        const maxSize = Math.max(size.x, size.y, size.z);
+
+        camera.position.set(center.x, center.y, maxSize * 1.5);
+        camera.lookAt(center);
+
+        console.log("Camera adjusted to:", camera.position);
+    }
+}
+
+        function exportCorrected() {
+            const shpName = document.getElementById('shp_name').value || 'exported_shapes';
+            fetch('/export_shapefile', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ shapes: shapes, shp_name: shpName })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    return response.json().then(err => { throw new Error(err.error); });
+                }
+                return response.json();
+            })
+            .then(data => {
+                alert(data.message);
+            })
+            .catch(error => {
+                console.error("Error exporting shapes:", error);
+                alert("Error exporting shapes: " + error.message);
+            });
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
